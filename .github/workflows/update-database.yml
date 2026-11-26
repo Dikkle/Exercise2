@@ -1,0 +1,73 @@
+name: Update Database
+
+# Trigger: any push that changes a file inside the 'data/' folder
+on:
+  push:
+    paths:
+      - "data/**"
+  workflow_dispatch: {}  # allows manual runs from the Actions tab
+
+jobs:
+  update-database:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # sqlite3 is part of the Python standard library, no pip install needed
+          pip install pandas flask
+
+      - name: Verify data files exist
+        run: |
+          ls -la data/
+          test -f data/customer.txt || test -f "data/MIS2001(customer).txt" || (echo "customer data file not found in data/" && exit 1)
+          test -f data/order.txt || test -f "data/MIS2001(order).txt" || (echo "order data file not found in data/" && exit 1)
+
+      - name: Run clean_and_merge script to update the database
+        run: |
+          # Resolve actual file names inside data/
+          CUSTOMER_FILE=$(ls data/ | grep -i customer | head -1 | sed 's|^|data/|')
+          ORDER_FILE=$(ls data/ | grep -i order | head -1 | sed 's|^|data/|')
+          python clean_and_merge.py "$CUSTOMER_FILE" "$ORDER_FILE"
+
+      - name: Show database contents (verification)
+        run: |
+          python - <<'EOF'
+          import sqlite3
+          conn = sqlite3.connect("merged_data.db")
+          print("merged_orders:")
+          for row in conn.execute("SELECT * FROM merged_orders"):
+              print(row)
+          print("avg_amount_by_region:")
+          for row in conn.execute("SELECT * FROM avg_amount_by_region"):
+              print(row)
+          conn.close()
+          EOF
+
+      - name: Upload database artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: merged-database
+          path: merged_data.db
+          if-no-files-found: error
+
+      - name: Commit updated database back to the repository
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add merged_data.db
+          if git diff --cached --quiet; then
+            echo "No database changes to commit."
+          else
+            git commit -m "ci: update merged_data.db from data/ [skip ci]"
+            git push
+          fi

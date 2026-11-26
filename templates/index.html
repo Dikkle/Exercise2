@@ -1,36 +1,172 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>hands-on 1 in week 10</title>
-    <style>
-        body {
-            font-family: "Segoe UI", Arial, sans-serif;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            margin: 0;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: #fff;
-        }
-        .card {
-            background: rgba(255, 255, 255, 0.12);
-            padding: 48px 64px;
-            border-radius: 16px;
-            text-align: center;
-            backdrop-filter: blur(8px);
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
-        }
-        h1 { font-size: 1.6rem; margin: 0 0 16px; }
-        p  { font-size: 1.1rem; margin: 0; }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Merged Orders Dashboard</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      background: #f4f6fb;
+      color: #2c3e50;
+      min-height: 100vh;
+      padding: 32px;
+    }
+    .container { max-width: 1100px; margin: 0 auto; }
+    h1 { font-size: 1.7rem; margin-bottom: 4px; color: #1a2a4a; }
+    .subtitle { color: #7a869a; font-size: .95rem; margin-bottom: 24px; }
+    .status-bar {
+      display: flex; align-items: center; gap: 10px;
+      margin-bottom: 20px; font-size: .9rem; color: #556;
+    }
+    .dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: #22b573; animation: pulse 2s infinite;
+    }
+    .dot.out { background: #e5484d; animation: none; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; } 50% { opacity: .35; }
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 24px;
+      align-items: start;
+    }
+    @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+    .card {
+      background: #fff; border-radius: 12px;
+      box-shadow: 0 2px 10px rgba(20, 40, 80, .08);
+      overflow: hidden;
+    }
+    .card h2 {
+      font-size: 1.05rem; padding: 16px 20px 12px;
+      color: #1a2a4a; border-bottom: 1px solid #eef1f6;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: .92rem; }
+    th, td { padding: 11px 20px; text-align: left; }
+    thead th {
+      background: #f8fafc; color: #5a6a85;
+      font-weight: 600; font-size: .8rem;
+      text-transform: uppercase; letter-spacing: .04em;
+      border-bottom: 1px solid #eef1f6;
+    }
+    tbody tr { border-bottom: 1px solid #f1f4f9; }
+    tbody tr:last-child { border-bottom: none; }
+    tbody tr:hover { background: #f6f9ff; }
+    td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .currency {
+      display: inline-block; padding: 2px 8px; border-radius: 6px;
+      font-size: .78rem; font-weight: 600;
+    }
+    .currency.USD { background: #e8f1ff; color: #2563eb; }
+    .currency.EUR { background: #fdf0e7; color: #c2610c; }
+    .currency.CNY { background: #e9f9ef; color: #158a4c; }
+    .currency.JPY { background: #fdeaea; color: #c03434; }
+    .empty { padding: 28px 20px; color: #98a2b3; font-style: italic; }
+    .updated { font-size: .82rem; color: #98a2b3; }
+  </style>
 </head>
 <body>
-    <div class="card">
-        <h1>hands-on 1 in week 10</h1>
-        <p>Hello, this is a web app deployed at a local server!</p>
+  <div class="container">
+    <h1>Merged Orders Dashboard</h1>
+    <p class="subtitle">Orders joined with customer data — amounts converted to CNY (SQLite backend)</p>
+
+    <div class="status-bar">
+      <span class="dot" id="status-dot"></span>
+      <span id="status-text">Connecting to database…</span>
+      <span class="updated" id="last-updated"></span>
     </div>
+
+    <div class="grid">
+      <div class="card">
+        <h2>Merged Orders</h2>
+        <div id="orders-table"></div>
+      </div>
+      <div class="card">
+        <h2>Avg amount_cny by Region</h2>
+        <div id="summary-table"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const POLL_INTERVAL_MS = 2000;
+    let lastMtime = null;
+
+    function fmtMoney(v) {
+      return v == null ? "" : Number(v).toLocaleString("zh-CN", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    }
+
+    function nowTime() {
+      return new Date().toLocaleTimeString("zh-CN", {hour12: false});
+    }
+
+    async function fetchJson(url) {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`${url} -> HTTP ${res.status}`);
+      return res.json();
+    }
+
+    function renderTable(containerId, rows, columns) {
+      const el = document.getElementById(containerId);
+      if (!rows || rows.length === 0) {
+        el.innerHTML = '<div class="empty">No data. Run clean_and_merge.py to generate the database.</div>';
+        return;
+      }
+      const thead = columns.map(c => `<th class="${c.num ? "num" : ""}">${c.label}</th>`).join("");
+      const tbody = rows.map(r => "<tr>" + columns.map(c =>
+        `<td class="${c.num ? "num" : ""}">${c.render ? c.render(r[c.key]) : r[c.key]}</td>`
+      ).join("") + "</tr>").join("");
+      el.innerHTML = `<table><thead><tr>${thead}</tr></thead><tbody>${tbody}</tbody></table>`;
+    }
+
+    async function loadData() {
+      const [orders, summary] = await Promise.all([
+        fetchJson("/api/merged-orders"),
+        fetchJson("/api/summary"),
+      ]);
+      renderTable("orders-table", orders.rows, [
+        {key: "order_id", label: "Order ID"},
+        {key: "customer_id", label: "Customer"},
+        {key: "amount", label: "Amount", num: true},
+        {key: "currency", label: "Currency", render: v => `<span class="currency ${v}">${v}</span>`},
+        {key: "amount_cny", label: "Amount (CNY)", num: true, render: fmtMoney},
+        {key: "customer_name", label: "Name"},
+        {key: "region", label: "Region"},
+      ]);
+      renderTable("summary-table", summary.rows, [
+        {key: "region", label: "Region"},
+        {key: "avg_amount_cny", label: "Avg (CNY)", num: true, render: fmtMoney},
+      ]);
+      document.getElementById("last-updated").textContent = `· updated ${nowTime()}`;
+    }
+
+    async function checkStatus() {
+      const dot = document.getElementById("status-dot");
+      const text = document.getElementById("status-text");
+      try {
+        const s = await fetchJson("/api/status");
+        if (!s.db_exists) {
+          dot.classList.add("out");
+          text.textContent = "Database not found — run clean_and_merge.py first";
+          return;
+        }
+        dot.classList.remove("out");
+        text.textContent = "Live — auto-refreshing";
+        if (lastMtime === null || s.db_mtime !== lastMtime) {
+          await loadData();
+          lastMtime = s.db_mtime;
+        }
+      } catch (e) {
+        dot.classList.add("out");
+        text.textContent = "Connection error";
+      }
+    }
+
+    checkStatus();
+    setInterval(checkStatus, POLL_INTERVAL_MS);
+  </script>
 </body>
 </html>
