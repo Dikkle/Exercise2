@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>stock4-app-1 · NASDAQ News</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22><text y=%2214%22 font-size=%2214%22>%F0%9F%93%88</text></svg>">
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --muted: #94a3b8;
+      --text: #e2e8f0;
+      --accent: #38bdf8;
+      --err: #f87171;
+      --border: #334155;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 15px/1.5 system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    header h1 { margin: 0; font-size: 18px; letter-spacing: 0.3px; }
+    select, button {
+      background: var(--card);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 12px;
+      font: inherit;
+    }
+    button { cursor: pointer; transition: background .15s ease; }
+    button:hover:not(:disabled) { background: #273549; }
+    button:disabled { opacity: 0.55; cursor: not-allowed; }
+    .status {
+      margin-left: auto;
+      color: var(--muted);
+      font-size: 13px;
+      font-variant-numeric: tabular-nums;
+    }
+    .status.err { color: var(--err); }
+    main { max-width: 960px; width: 100%; margin: 0 auto; padding: 24px; flex: 1; }
+    .meta { color: var(--muted); font-size: 13px; margin: 4px 0 18px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+      margin-bottom: 12px;
+    }
+    .card h3 { margin: 0 0 6px; font-size: 15px; line-height: 1.35; }
+    .card h3 a { color: var(--accent); text-decoration: none; }
+    .card h3 a:hover { text-decoration: underline; }
+    .src { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+    .summary { margin: 0; white-space: pre-wrap; }
+    .pill {
+      display: inline-block;
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      margin-left: 8px;
+      vertical-align: middle;
+      background: #0ea5e9;
+      color: #001018;
+      font-weight: 600;
+    }
+    .pill.bullish { background: #22c55e; color: #052e16; }
+    .pill.bearish { background: #ef4444; color: #270a0a; }
+    .pill.neutral { background: #94a3b8; color: #0b1220; }
+    .empty { padding: 40px 0; text-align: center; color: var(--muted); }
+    .mock-banner {
+      background: #422006;
+      border: 1px solid #92400e;
+      color: #fcd34d;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 13px;
+      margin-bottom: 16px;
+    }
+    footer {
+      padding: 14px 24px;
+      color: var(--muted);
+      font-size: 12px;
+      text-align: center;
+      border-top: 1px solid var(--border);
+    }
+    footer a { color: var(--accent); text-decoration: none; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>📈 stock4-app-1</h1>
+    <label for="sym" class="sr-only" style="position:absolute;left:-9999px">Symbol</label>
+    <select id="sym" aria-label="Stock symbol"><option value="">Loading…</option></select>
+    <button id="go" type="button" disabled>Get news</button>
+    <span id="status" class="status">idle</span>
+  </header>
+
+  <main>
+    <div id="meta" class="meta">Pick a NASDAQ stock to load latest news.</div>
+    <div id="list"></div>
+  </main>
+
+  <footer>
+    Data by <a href="https://www.alphavantage.co" target="_blank" rel="noopener">Alpha Vantage</a>
+    · For informational use only — not financial advice.
+  </footer>
+
+  <script src="/vendor/react.production.min.js"></script>
+  <script src="/vendor/react-dom.production.min.js"></script>
+  <script>
+  (function () {
+      const e = React.createElement;
+      const { createRoot } = ReactDOM;
+
+      const $sym = document.getElementById('sym');
+      const $go = document.getElementById('go');
+      const $status = document.getElementById('status');
+      const $meta = document.getElementById('meta');
+      const $list = document.getElementById('list');
+      const root = createRoot($list);
+
+      let stocks = [];
+      let inflight = null;
+
+      function setStatus(text, isError) {
+          $status.textContent = text;
+          $status.classList.toggle('err', !!isError);
+      }
+
+      function pillClass(label) {
+          if (!label) return '';
+          const s = String(label).toLowerCase();
+          if (s.includes('bull')) return 'bullish';
+          if (s.includes('bear')) return 'bearish';
+          if (s.includes('neutral')) return 'neutral';
+          return '';
+          }
+
+      function formatTime(s) {
+          if (!s || s.length < 8) return '';
+          return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)} ${s.slice(9, 11) || '00'}:${s.slice(11, 13) || '00'}`;
+      }
+
+      function renderError(message) {
+          $meta.textContent = '';
+          root.render(e('div', { className: 'empty' }, '⚠️ ' + message));
+      }
+
+      function renderEmpty(symbol) {
+          $meta.textContent = `No news items returned for ${symbol}.`;
+          root.render(e('div', { className: 'empty' }, 'No recent articles.'));
+      }
+
+      function renderData(data) {
+          $meta.textContent = `${data.count} news item(s) for ${data.symbol}${data.mock ? ' (mock)' : ''}.`;
+          if (!data.items || !data.items.length) return renderEmpty(data.symbol);
+
+          const banner = data.mock
+              ? e('div', { className: 'mock-banner' }, '⚠️ MOCK DATA — generated locally by scraper.py (MOCK=1). Not real market news.')
+              : null;
+
+          const cards = data.items.map((it, i) =>
+              e('article', { key: i, className: 'card' },
+                  e('h3', null,
+                      e('a', { href: it.url, target: '_blank', rel: 'noopener noreferrer' }, it.title),
+                      it.sentiment
+                          ? e('span', { className: 'pill ' + pillClass(it.sentiment) }, it.sentiment)
+                          : null
+                  ),
+                  e('div', { className: 'src' },
+                      (it.source || '—') + ' · ' + formatTime(it.published)
+                  ),
+                  e('p', { className: 'summary' }, it.summary || '')
+              )
+          );
+          root.render(e(React.Fragment, null, banner, cards));
+      }
+
+      function load() {
+          const symbol = $sym.value;
+          if (!symbol || inflight) return;
+          inflight = (async () => {
+              setStatus('loading…');
+              $go.disabled = true;
+              $meta.textContent = `Fetching news for ${symbol}…`;
+              root.render(null);
+              try {
+                  const resp = await fetch('/api/news/' + encodeURIComponent(symbol), { cache: 'no-store' });
+                  const body = await resp.json().catch(() => ({}));
+                  if (!resp.ok) {
+                      setStatus('error', true);
+                      return renderError(describeError(body, resp.status));
+                  }
+                  setStatus('ok');
+                  if (body.error) return renderError(describeError(body, resp.status));
+                  renderData(body);
+              } catch (err) {
+                  setStatus('network error', true);
+                  renderError(String(err && err.message || err));
+              } finally {
+                  inflight = null;
+                  $go.disabled = !$sym.value;
+              }
+          })();
+      }
+
+      function describeError(body, status) {
+          if (!body || !body.error) return `Request failed (HTTP ${status})`;
+          switch (body.error) {
+              case 'invalid_symbol': return `Invalid symbol: ${body.symbol || ''}`;
+              case 'symbol_not_supported': return `Symbol ${body.symbol} is not in the NASDAQ-10 list.`;
+              case 'missing_api_key': return 'Server is missing ALPHA_VANTAGE_API_KEY. Set it in .env and restart.';
+              case 'rate_limited': return `Alpha Vantage rate limit hit — try again in a minute.${body.detail ? ' (' + body.detail + ')' : ''}`;
+              case 'api_error': return `Alpha Vantage error: ${body.detail || 'unknown'}`;
+              case 'bad_request': return `Alpha Vantage rejected the request: ${body.detail || ''}`;
+              case 'network': return `Network error reaching Alpha Vantage. ${body.detail || ''}`;
+              default: return `${body.error}${body.detail ? ': ' + body.detail : ''}`;
+          }
+      }
+
+      async function loadStocks() {
+          try {
+              const resp = await fetch('/api/stocks', { cache: 'no-store' });
+              if (!resp.ok) throw new Error('HTTP ' + resp.status);
+              stocks = await resp.json();
+              if (!Array.isArray(stocks) || !stocks.length) throw new Error('empty list');
+          } catch (err) {
+              $sym.innerHTML = '<option value="">unavailable</option>';
+              setStatus('failed to load stocks', true);
+              return renderError('Could not load stock list: ' + (err.message || err));
+          }
+          $sym.innerHTML = stocks
+              .map(s => '<option value="' + s + '">' + s + '</option>')
+              .join('');
+          $sym.value = stocks[0];
+          $go.disabled = false;
+          setStatus('idle');
+      }
+
+      $sym.addEventListener('change', () => {
+          $go.disabled = !$sym.value || !!inflight;
+      });
+      $go.addEventListener('click', load);
+      document.addEventListener('keydown', (ev) => {
+          if ((ev.key === 'Enter' || ev.key === ' ') && document.activeElement === $sym) {
+              ev.preventDefault();
+              load();
+          }
+      });
+
+      loadStocks();
+    })();
+  </script>
+</body>
+</html>

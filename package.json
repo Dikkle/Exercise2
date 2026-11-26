@@ -1,0 +1,17 @@
+{
+  "name": "stock4-app-1",
+  "version": "1.0.0",
+  "description": "NASDAQ-10 stock news dashboard. Node/Express backend spawns a Python scraper that hits the Alpha Vantage NEWS_SENTIMENT endpoint; a static React page drives the selection.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2"
+  }
+}
